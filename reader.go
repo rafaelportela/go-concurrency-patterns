@@ -88,7 +88,7 @@ func (s *sub) loopFetchOnly() {
 	}
 }
 
-func (s *sub) lookSendOnly() {
+func (s *sub) loopSendOnly() {
 	var pending []Item // appended by fetch, consumed by send
 	for {
 		var first Item
@@ -105,8 +105,50 @@ func (s *sub) lookSendOnly() {
 	}
 }
 
+// mergedLoop: it combines loopFetchOnly, loopSendOnly
+// and loopCloseOnly
+func (s *sub) loopFetchSendClose() {
+	var pending []Item
+	var next time.Time
+	var err error
+
+	for {
+		var fetchDelay time.Duration
+		if now := time.Now(); next.After(now) {
+			fetchDelay = next.Sub(now)
+		}
+
+		// timer setup: returns chan that will receive current time after delay
+		startFetch := time.After(fetchDelay)
+
+		var first Item
+		var updates chan Item
+		if len(pending) > 0 {
+			first = pending[0]
+			updates = s.updates
+		}
+
+		select {
+		case errc := <-s.closing:
+			errc <- err
+			close(s.updates)
+			return
+		case <-startFetch:
+			var fetched []Item
+			fetched, next, err = s.fetcher.Fetch()
+			if err != nil {
+				next = time.Now().Add(10 * time.Second)
+				break
+			}
+			pending = append(pending, fetched...)
+		case updates <- first:
+			pending = pending[1:]
+		}
+	}
+}
+
 func (s *sub) loop() {
-	s.loopCloseOnly()
+	s.loopFetchSendClose()
 }
 
 // goroutines may block forever on m.updates if the receiver
