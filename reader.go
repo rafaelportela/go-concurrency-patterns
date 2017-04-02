@@ -64,31 +64,50 @@ func (s *sub) loopCloseOnly() {
 	}
 }
 
+func (s *sub) loopFetchOnly() {
+	var pending []Item // appended by fetch, consumed by send
+	var next time.Time // init: Jan 1st, year 0
+	var err error
+	for {
+		var fetchDelay time.Duration // init 0: no delay
+		if now := time.Now(); next.After(now) {
+			fetchDelay = next.Sub(now)
+		}
+		startFetch := time.After(fetchDelay)
+
+		select {
+		case <-startFetch:
+			var fetched []Item
+			fetched, next, err = s.fetcher.Fetch()
+			if err != nil {
+				next = time.Now().Add(10 * time.Second)
+				break
+			}
+			pending = append(pending, fetched...)
+		}
+	}
+}
+
+func (s *sub) lookSendOnly() {
+	var pending []Item // appended by fetch, consumed by send
+	for {
+		var first Item
+		var updates chan Item
+		if len(pending) > 0 {
+			first = pending[0]
+			updates = s.updates
+		}
+
+		select {
+		case updates <- first:
+			pending = pending[1:]
+		}
+	}
+}
+
 func (s *sub) loop() {
 	s.loopCloseOnly()
 }
-
-// loop fetches Items using s.fetcher and send them on s.updates
-// Exits when s.Close is called
-//func (s *sub) loop() {
-//	for {
-//		if s.closed {
-//			close(s.updates)
-//			return
-//		}
-//		items, next, err := s.fetcher.Fetch()
-//		if err != nil {
-//			s.err = err
-//			time.Sleep(10 * time.Second)
-//			continue
-//		}
-//		for _, item := range items {
-//			s.updates <- item
-//		}
-//		if now := time.Now(); next.After(now) {
-//			time.Sleep(next.Sub(now))
-//		}
-//}
 
 // goroutines may block forever on m.updates if the receiver
 // stops receiving.
