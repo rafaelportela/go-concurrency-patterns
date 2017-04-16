@@ -4,16 +4,6 @@ import (
 	"time"
 )
 
-type Item struct {
-	Title, Channel, GUID string // subset of RSS fields
-}
-
-type Fetcher interface {
-	// Fetches items for a given uri and returns the time when the next
-	// fetch should be attempted.
-	Fetch() (items []Item, next time.Time, err error)
-}
-
 // returns a new Subscription using Fetcher to fetch Items.
 func Subscribe(fetcher Fetcher) Subscription {
 	s := &sub{
@@ -23,14 +13,6 @@ func Subscribe(fetcher Fetcher) Subscription {
 	}
 	go s.loop()
 	return s
-}
-
-// Subscription delivers Items over a channel.
-// Close cancels the subscription, closes the Updates channel and
-// returns the last fetch error, if any.
-type Subscription interface {
-	Updates() <-chan Item // stream of Items
-	Close() error         // close the stream
 }
 
 // sub implements the subscription interface
