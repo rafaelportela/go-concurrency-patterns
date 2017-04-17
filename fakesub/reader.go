@@ -27,9 +27,9 @@ func main() {
 
 	// Subscribe to some feeds and create a merged update stream
 	merged := NaiveMerge(
-		NaiveSubscribe(Fetch("blog.goland.org")),
-		NaiveSubscribe(Fetch("googleblog.blogspot.com")),
-		NaiveSubscribe(Fetch("googledevelopers.blogspot.com")))
+		Subscribe(Fetch("blog.goland.org")),
+		Subscribe(Fetch("googleblog.blogspot.com")),
+		Subscribe(Fetch("googledevelopers.blogspot.com")))
 
 	// Close the subscription after some time
 	time.AfterFunc(3*time.Second, func() {
