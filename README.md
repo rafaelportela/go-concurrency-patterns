@@ -49,3 +49,130 @@ Solution: Use the for-select loop pattern to catch if:
 * `Close` was called
 * it's time to call `Fetch`
 * send one item on `s.updates`
+
+## Fake subscription
+
+This version aims to fix the issues presented before. It's called fake because it is still not
+fetching real rss feeds, but it works properly.
+
+To fix bug 1 we need to change the `closed bool` and `err error` values, shared by client code
+and internal loop, to communication channels. In fact `closing chan chan error`, a channel
+that expects a channel back, will work like a simple request-response pattern. The internal
+loop, like a server, provides a channel where it will be listening for requests to close.
+The client will send a closing request in the shape of an `chan error` which should be used
+by the server to send an acknowledgement back to the client, in addition to a possible error
+value.
+
+```
+type sub struct {
+	fetcher Fetcher
+	updates chan Item
+	closing chan chan error
+}
+```
+
+When `Close()` from a subscription is called, an error channel will be created and sent to the
+`s.closing` channel. The return will block until it gets a response back from the error channel
+just created.
+
+```
+func (s *sub) Close() error {
+	errc := make(chan error)
+	s.closing <- errc
+	return <-errc             // blocks here
+}
+```
+
+And from inside the loop:
+```
+func (s *sub) loop() {
+
+    ...
+
+    select {
+    case errc := <-s.closing: // In case we receive a channel from s.closing
+        errc <- err           // we send the current error value through,
+        close(s.updates)      // close the subscription
+        return                // and return
+
+    ...
+}
+```
+
+For bug 2, instead of using a explicit sleep call between fetches, the time for the next
+fetch will be calculated with `time.After(fetchDelay)`, which returns a channel. 
+```
+func (s *sub) loop() {
+    ...
+	var next time.Time
+    ...
+    for {
+        var fetchDelay time.Duration
+        if now := time.Now(); next.After(now) {
+            fetchDelay = next.Sub(now)
+        }
+        startFetch := time.After(fetchDelay)        // "timer" channel
+```
+
+Then, a value will be send to this channel when the timer set expires.
+
+```
+func (s *sub) loop() {
+
+    ...
+
+    select {
+
+    ...
+
+    case <-startFetch:                              // timer expires: receives value
+        var fetched []Item
+        fetched, next, err = s.fetcher.Fetch()      // fetch items
+        if err != nil {
+            next = time.Now().Add(10 * time.Second) // set next delay in case of an error
+            break
+        }
+        pending = append(pending, fetched...)       // append results
+
+    ...
+
+    }
+}
+```
+
+Finally, for bug 3 we want to deliver the items to the client channel. A first simple
+approach where the first item from the `pending` slice is sent to `s.updates` is also
+buggy. If `pending` has no items, `pending[0]` would panic with index out of range.
+
+The improved version uses the nil channel pattern. An attempt to receive an item from
+a `nil` channel doesn't panic, it blocks the same way a defined channel would when no
+value is available, *it's a feature, not a bug*. Inside of a select-case, the `nil`
+channel will just be ignored.
+
+```
+func (s *sub) loop() {
+
+        ...
+
+		var updates chan Item      // nil: declared but not set
+		if len(pending) > 0 {
+			first = pending[0]
+			updates = s.updates    // define updates
+		}
+
+        ...
+
+        select {
+		case updates <- first:     // fired only if updates is defined
+			pending = pending[1:]
+		}
+
+        ...
+}
+```
+
+So the trick here is to keep the channel enabled (defined, not `nil`) only if there is
+a `first` item to be sent. If more than one item is fetched, the for loop will likely
+select the same case again and again to send all items to `s.updates` until have them
+all delivered, then blocking while waiting for the next fetch delay expire, or for a
+close request from client.
