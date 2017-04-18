@@ -26,7 +26,7 @@ type Subscription interface {
 func main() {
 
 	// Subscribe to some feeds and create a merged update stream
-	merged := NaiveMerge(
+	merged := Merge(
 		Subscribe(Fetch("blog.goland.org")),
 		Subscribe(Fetch("googleblog.blogspot.com")),
 		Subscribe(Fetch("googledevelopers.blogspot.com")))

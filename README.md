@@ -146,7 +146,7 @@ buggy. If `pending` has no items, `pending[0]` would panic with index out of ran
 
 The improved version uses the nil channel pattern. An attempt to receive an item from
 a `nil` channel doesn't panic, it blocks the same way a defined channel would when no
-value is available, *it's a feature, not a bug*. Inside of a select-case, the `nil`
+value is available - *it's a feature, not a bug*. Inside of a select-case, the `nil`
 channel will just be ignored.
 
 ```
@@ -176,3 +176,60 @@ a `first` item to be sent. If more than one item is fetched, the for loop will l
 select the same case again and again to send all items to `s.updates` until have them
 all delivered, then blocking while waiting for the next fetch delay expire, or for a
 close request from client.
+
+### Merge subscriptions
+
+Running `go run -race *.go` still reports data races. `naiveMerge` still makes it
+possible to access its `updates` channel directly from different routines: in `Close`
+and inside `NaiveMerge` loop. The solution is on the same line of the ones applied
+to subscription, unsynchonized access to values should be converted to communication
+by channels.
+
+```
+func Merge(subs ...Subscription) Subscription {
+
+    ...
+
+	for _, sub := range subs {            // for each subscription
+		go func(s Subscription) {         // create a goroutine
+			for {                         // in a loop:
+                var it Item
+                select {                  // blocks waiting for
+                case it = <-s.Updates():  // an update from subscription
+                case <-m.quit:            // or a quit request
+                    m.errs <- s.Close()
+                    return
+                }
+
+                select {                  // if got an Item
+                case m.updates <- it:     // send to merged sub's updates
+                case <-m.quit:            // or receives a quit, whatever comes first
+                    m.errs <- s.Close()
+                    return
+                }
+
+      ...
+}
+```
+
+The `Merge` function returns `merge` struct, which is a `Subscription`. So needs to
+to implement `Close()` and `Updates()`. Now `Close()` will not attempt to close the
+subs' channels directly, it will close its own `quit` channel instead.
+
+```
+func (m *merge) Close() (err error) {
+	close(m.quit)
+	for _ = range m.subs {
+		if e := <-m.errs; e != nil {
+			err = e
+		}
+	}
+	close(m.updates)
+	return
+}
+```
+
+When a channel is closed, the receivers, after reading all remaining values, won't
+be able to block waiting for more values. The lines `case <-m.quit:` from `Merge`'s
+loop will receive an empty value, calling `Close()` for each subscription and
+sending the errors back to the `m.errs`. Finally, `m.updates` can be safely closed.
