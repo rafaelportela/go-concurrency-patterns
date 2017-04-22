@@ -38,6 +38,7 @@ func (s *sub) loop() {
 	var pending []Item
 	var next time.Time
 	var err error
+	var seen = make(map[string]bool)
 
 	for {
 		var fetchDelay time.Duration
@@ -67,7 +68,12 @@ func (s *sub) loop() {
 				next = time.Now().Add(10 * time.Second)
 				break
 			}
-			pending = append(pending, fetched...)
+			for _, item := range fetched {
+				if !seen[item.GUID] {
+					pending = append(pending, item)
+					seen[item.GUID] = true
+				}
+			}
 		case updates <- first:
 			pending = pending[1:]
 		}
