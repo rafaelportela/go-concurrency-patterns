@@ -233,3 +233,8 @@ When a channel is closed, the receivers, after reading all remaining values, won
 be able to block waiting for more values. The lines `case <-m.quit:` from `Merge`'s
 loop will receive an empty value, calling `Close()` for each subscription and
 sending the errors back to the `m.errs`. Finally, `m.updates` can be safely closed.
+
+At this point `go run -race *.go` should run with no data race warnings. For the
+amount of asynchronous data flow, the lines of code are compact and relatively
+easy to read and change. Importantly, this was achieved with __no locks, no
+condition variables, no callbacks__.
