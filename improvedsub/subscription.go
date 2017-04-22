@@ -35,6 +35,15 @@ func (s *sub) Close() error {
 // mergedLoop: it combines loopFetchOnly, loopSendOnly
 // and loopCloseOnly
 func (s *sub) loop() {
+
+	const maxPending = 10
+	type fetchResult struct {
+		fetched []Item
+		next    time.Time
+		err     error
+	}
+	var fetchDone chan fetchResult
+
 	var pending []Item
 	var next time.Time
 	var err error
@@ -46,8 +55,10 @@ func (s *sub) loop() {
 			fetchDelay = next.Sub(now)
 		}
 
-		// timer setup: returns chan that will receive current time after delay
-		startFetch := time.After(fetchDelay)
+		var startFetch <-chan time.Time
+		if fetchDone == nil && len(pending) < maxPending {
+			startFetch = time.After(fetchDelay)
+		}
 
 		var first Item
 		var updates chan Item
@@ -62,8 +73,15 @@ func (s *sub) loop() {
 			close(s.updates)
 			return
 		case <-startFetch:
-			var fetched []Item
-			fetched, next, err = s.fetcher.Fetch()
+			fetchDone = make(chan fetchResult, 1)
+			go func() {
+				fetched, next, err := s.fetcher.Fetch()
+				fetchDone <- fetchResult{fetched, next, err}
+			}()
+		case result := <-fetchDone:
+			fetchDone = nil
+			fetched := result.fetched
+			next, err = result.next, result.err
 			if err != nil {
 				next = time.Now().Add(10 * time.Second)
 				break
