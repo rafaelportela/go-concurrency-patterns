@@ -238,3 +238,19 @@ At this point `go run -race *.go` should run with no data race warnings. For the
 amount of asynchronous data flow, the lines of code are compact and relatively
 easy to read and change. Importantly, this was achieved with __no locks, no
 condition variables, no callbacks__.
+
+
+## Improved subscription
+
+We have a proper working subscription mechanism, but it still can be improved.
+Firstly, the results from Fetcher could be duplicated from different `fetch` calls.
+This is easily worked out using a `map[string]bool` to map the result items' id to
+a corresponding seen or not seen yet boolean value.
+
+Another issue is that the queue of incoming fetched items is unbounded. In case
+the client code is not able to consume items as fast as they are fetched _bad
+things™_ can happens with new items piling up with no contention. To overcome this
+possibility, the startFetch timer is only set when there's no current fetching
+rountine running and if the amount of pending items is below `pending` const value.
+When a fetch is triggered, results will be sent to `fetchDone` channel, which will
+then be disabled - the set-channel-as-nil trick - while waiting for the next fetch.
